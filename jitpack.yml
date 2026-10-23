@@ -1,0 +1,6 @@
+# JitPack builds the two libraries from the repository root (this folder).
+# Coordinates: com.github.Pixel-Du-Nord.faro-android:faro:<tag> and :faro-ui:<tag>.
+jdk:
+  - openjdk17
+install:
+  - ./gradlew :faro:publishToMavenLocal :faro-ui:publishToMavenLocal -x test --no-daemon --stacktrace

@@ -1,0 +1,123 @@
+{
+  "locales": [
+    "es",
+    "en"
+  ],
+  "title": {
+    "en": "Write to us",
+    "es": "Escríbenos"
+  },
+  "intro": {
+    "en": "Tell us what happened at the table. We read everything and reply by email.",
+    "es": "Cuéntanos qué pasó en la mesa. Lo leemos todo y te respondemos al correo."
+  },
+  "submit": {
+    "en": "Send",
+    "es": "Enviar"
+  },
+  "success": {
+    "en": "It made it home! We'll reply to the email you left us.",
+    "es": "¡Llegó a la casa! Te respondemos al correo que nos dejaste."
+  },
+  "kinds": [
+    "problem",
+    "suggestion",
+    "question"
+  ],
+  "name": {
+    "mode": "optional",
+    "label": {
+      "en": "Your name",
+      "es": "Tu nombre"
+    },
+    "width": "full"
+  },
+  "email": {
+    "label": {
+      "en": "Your email",
+      "es": "Tu correo"
+    },
+    "help": {
+      "en": "That's where we'll reply.",
+      "es": "Ahí te respondemos."
+    },
+    "width": "full"
+  },
+  "message": {
+    "label": {
+      "en": "Your message",
+      "es": "Tu mensaje"
+    },
+    "placeholder": {
+      "en": "What happened? If it was during a game, tell us when and what you were doing.",
+      "es": "¿Qué pasó? Si fue en una partida, cuéntanos cuándo y qué estabas haciendo."
+    },
+    "width": "full"
+  },
+  "fields": [
+    {
+      "key": "where",
+      "type": "select",
+      "label": {
+        "en": "Where did it happen?",
+        "es": "¿Dónde pasó?"
+      },
+      "placeholder": {
+        "en": "Choose one",
+        "es": "Elige una opción"
+      },
+      "required": false,
+      "width": "full",
+      "options": [
+        {
+          "value": "online",
+          "label": {
+            "en": "Online game",
+            "es": "Partida en línea"
+          }
+        },
+        {
+          "value": "friends",
+          "label": {
+            "en": "Room with friends",
+            "es": "Sala con amigos"
+          }
+        },
+        {
+          "value": "bots",
+          "label": {
+            "en": "Against the bots",
+            "es": "Contra la máquina"
+          }
+        },
+        {
+          "value": "shop",
+          "label": {
+            "en": "Shop and purchases",
+            "es": "Tienda y compras"
+          }
+        },
+        {
+          "value": "account",
+          "label": {
+            "en": "My account",
+            "es": "Mi cuenta"
+          }
+        },
+        {
+          "value": "other",
+          "label": {
+            "en": "Something else",
+            "es": "Otra cosa"
+          }
+        }
+      ]
+    }
+  ],
+  "order": [
+    "where",
+    "message",
+    "email",
+    "name"
+  ]
+}
