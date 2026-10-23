@@ -35,9 +35,9 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.Pixel-Du-Nord.faro-android:faro-ui:1.0.0") // the screen (includes the core)
+    implementation("com.github.Pixel-Du-Nord.faro-android:faro-ui:1.0.1") // the screen (includes the core)
     // or only the core, for your own UI:
-    // implementation("com.github.Pixel-Du-Nord.faro-android:faro:1.0.0")
+    // implementation("com.github.Pixel-Du-Nord.faro-android:faro:1.0.1")
 }
 ```
 
@@ -57,7 +57,7 @@ class MyApp : Application() {
             FaroConfig(
                 key = "wk_…",          // Widget → Installation in the Faro panel (public by design)
                 app = "my-app",        // Organization → Applications: groups requests, picks the app's own form
-                locale = null,         // your app's language; null = the device's
+                locale = null,         // default language; null = the device's
             ),
         )
     }
@@ -68,10 +68,14 @@ class MyApp : Application() {
 |---|---|
 | `key` | The public widget key `wk_…`. It can only file requests, never read anything. |
 | `app` | The application slug. Optional; with it, requests are grouped by app and validated against the app's own form if it has one. |
-| `locale` | The language your app is shown in (`es`, `en`, `pt-BR`…). Picks the form texts and the language of the emails. If your app has its own language setting, pass that one. |
+| `locale` | The default language (`es`, `en`, `pt-BR`…, cut to its base: `pt`), for calls that do not name one. Picks the form texts and the language of the emails. `null` uses the device's. |
 | `apiUrl` | Faro's API. Defaults to `https://api-faro.pixeldunord.com`. |
 
-Call `Faro.configure` again to change any of it (for example when the person switches language).
+If your app has its own language setting, do not configure again when it changes: pass the
+language with each call instead (`client.form(locale)`, `FaroRequest.locale` or `form.request(…)`,
+`FaroHelpOptions.locale`). `Faro.configure` is meant to be called once; if it is called again (say,
+another key from a debug menu), it updates the same client, so a `FaroClient` already kept by a
+`ViewModel` keeps working with the new settings.
 
 ## The ready-made screen
 
@@ -161,34 +165,32 @@ override fun onCreate(savedInstanceState: Bundle?) {
 }
 ```
 
+The screen opens with the screenshot and "Something's wrong" already chosen; pass your own
+`FaroHelpOptions` to change that.
+
 ## Your own UI with the core
 
 ```kotlin
-class FeedbackViewModel : ViewModel() {
-    private val faro = Faro.client
+// appLanguage: your app's own language setting ("es", "pt-BR"…), passed with each call.
+class FeedbackViewModel(private val appLanguage: String) : ViewModel() {
+    private val faro = Faro.client // safe to keep: Faro.configure never replaces it
 
     init {
         faro.prepare() // starts the anti-spam proof now: by the time the person sends, it is ready
     }
 
-    // Draw instantly from the disk copy, then refresh.
-    val cached: FaroForm? = faro.cachedForm()
-    suspend fun load(): FaroForm = faro.form()
+    // Draw instantly from the disk copy (or the SDK's minimal form), then refresh.
+    val first: FaroForm = faro.cachedForm(appLanguage) ?: FaroForm.fallback(appLanguage)
+    suspend fun load(): FaroForm = faro.form(appLanguage)
 
     suspend fun send(form: FaroForm, kind: FaroKind, values: Map<String, String>, pictures: List<FaroAttachment>): FaroTicket {
         val issues = form.validate(kind, values) // same checks as Faro, no round trip
         require(issues.isEmpty()) { "show $issues next to the fields" }
-        return faro.send(
-            FaroRequest(
-                kind = kind,
-                message = values[FaroForm.MESSAGE].orEmpty(),
-                email = values[FaroForm.EMAIL],
-                name = values[FaroForm.NAME],
-                fields = form.customValues(values),
-                attachments = pictures,
-                locale = form.locale,
-            ),
-        )
+        return faro.send(form.request(kind, values, pictures)) // in the form's language
+    }
+
+    override fun onCleared() {
+        faro.cancelPending() // the screen is gone: stop a proof still being solved
     }
 }
 ```
@@ -197,15 +199,44 @@ class FeedbackViewModel : ViewModel() {
   `success`, `kinds` and `fields` in order (the built-in `name` unless it is off, `email`, `message`,
   and your custom fields with `type`, `label`, `placeholder`, `help`, `required`, `options`,
   `groups`, `halfWidth`). Offline, it returns the disk copy with `isCached = true`.
+- `form.inLocale(locale)` gives the same form in another language without the network (for an app
+  that switches language on the spot).
+- `form.request(kind, values, attachments)` builds the `FaroRequest`: message, email and name to their
+  own properties, the custom answers through `customValues`, the form's language for the emails.
 - `send` waits whatever is left of Faro's 3-second minimum, retries once with a new proof if Faro
-  rejects it, and keeps the proof after a validation error so the corrected request goes out at once.
+  rejects it, keeps the proof after a validation error so the corrected request goes out at once,
+  and starts the next proof right after a success. `cancelPending()` stops a proof still being
+  solved (keeping a solved one); a `send` waiting for it simply makes another.
 - Pictures: `FaroAttachment.fromUri(context, uri)` (photo picker), `fromBitmap(bitmap)` or
   `fromBytes(bytes)`. They are scaled to 2048 px and re-encoded as JPEG under 3 MB.
+
+### A form of your own, or none at all
+
+When Faro cannot be reached and nothing is cached, `FaroForm.fallback(locale)` gives a minimal form
+(the three kinds, the message, the email and an optional name, without texts: use your own labels).
+You can also build one by hand; `validate`, `customValues` and `request` work on it the same way:
+
+```kotlin
+val form = FaroForm(
+    locale = "en",
+    fields = listOf(
+        FaroField(FaroForm.MESSAGE, FaroFieldType.TEXTAREA, label = "What happened?", required = true),
+        FaroField(FaroForm.EMAIL, FaroFieldType.EMAIL, label = "Your email", required = true),
+        FaroField("where", FaroFieldType.SELECT, label = "Where?", options = listOf(FaroOption("online", "Online game"))),
+    ),
+)
+```
+
+### Sending without a name
+
+`FaroRequest.name = null` uses the identified person's name; `""` sends no name at all, even for an
+identified person. `form.request` follows what the person saw: with the name turned off in the form,
+or emptied by the person, the request has no name.
 
 ## Identifying the person
 
 ```kotlin
-Faro.identify(FaroUser(id = user.id, email = user.email, name = user.name))
+Faro.identify(FaroUser(id = user.id, email = user.email, name = user.name)) // every part is optional
 // on sign-out
 Faro.identify(null)
 ```
@@ -259,10 +290,11 @@ Sent with a request, and only when the person sends it:
 - What they typed in the form and the pictures they chose to attach (covered parts burnt in).
 - The kind, the app slug and `platform: android`.
 - Device facts: app version and build, `Android` and its version, model, manufacturer, device
-  language, time zone and screen size. The help screen shows this list before sending.
+  language, time zone, screen size and the SDK version (`sdk`). The help screen shows this list
+  before sending.
 - The breadcrumbs your app recorded, the identified user (email, name, id, signature) and any
   `extraDevice` entries you add.
-- The language for the reply emails.
+- The language for the reply emails (its base: `pt`, not `pt-BR`).
 
 Never sent by the SDK: advertising or device identifiers, location, contacts, files, other apps,
 what was typed elsewhere in your app, or anything when the screen is merely opened (opening only
@@ -276,19 +308,23 @@ On the device the SDK stores the last form definition (in `noBackupFilesDir/faro
 
 | Call | |
 |---|---|
-| `Faro.configure(context, FaroConfig)` | Sets up the SDK; returns the client. |
+| `Faro.configure(context, FaroConfig)` | Sets up the SDK; returns the client. Again: updates the same client. |
 | `Faro.client` | The `FaroClient` (throws if not configured). |
 | `Faro.identify(FaroUser?)` / `Faro.user` | Who is using the app. |
 | `Faro.breadcrumb(text)` / `clearBreadcrumbs()` / `breadcrumbs` | Recent actions. |
 | `Faro.VERSION` | The SDK version. |
 | `FaroClient.form(locale)` | The form from Faro (disk copy when offline). `suspend` |
 | `FaroClient.cachedForm(locale)` | The disk copy, or `null`. |
-| `FaroClient.prepare()` | Starts the proof of work. |
+| `FaroClient.prepare()` / `cancelPending()` | Starts the proof of work / stops one being solved. |
+| `FaroClient.defaultLocale` | The language used when a call names none. |
 | `FaroClient.send(FaroRequest)` | Sends; returns `FaroTicket(number, email, confirmed)`. `suspend` |
 | `FaroClient.deviceFacts(extra)` | What travels as device facts right now. |
 | `FaroForm.validate(kind, values)` | Faro's checks, locally: issues by field key. |
+| `FaroForm.request(kind, values, attachments)` | The `FaroRequest` for what was typed. |
 | `FaroForm.customValues(values)` | The answers ready for `FaroRequest.fields`. |
 | `FaroForm.inLocale(locale)` | The same form in another language. |
+| `FaroForm(locale, fields, …)` / `FaroForm.fallback(locale)` | A form built by hand / a minimal one for offline. |
+| `FaroLocale.language(tag)` | The base language of a tag (`pt-BR` → `pt`). |
 | `FaroAttachment.fromUri / fromBitmap / fromBytes` | Pictures ready to send. |
 | `FaroHelpScreen(onClose, modifier, options, theme, onSent)` | The ready-made screen (Compose). |
 | `FaroHelpActivity.start(context, options, theme)` / `intent(…)` | The screen as an activity; result extra `EXTRA_TICKET_NUMBER`. |

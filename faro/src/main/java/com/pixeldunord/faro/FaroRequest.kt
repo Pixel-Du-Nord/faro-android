@@ -10,12 +10,15 @@ package com.pixeldunord.faro
  * @property message What the person wrote: 3 to 4,000 characters. Its first line becomes the subject
  *   unless [subject] is set.
  * @property email Where the team replies. `null` or blank uses the identified user's email.
- * @property name Optional (required if the form says so). `null` uses the identified user's name.
+ * @property name Optional (required if the form says so). `null` uses the identified user's name;
+ *   `""` sends no name at all, even for an identified person (what [FaroForm.request] does when the
+ *   form has the name turned off).
  * @property fields The answers to the custom fields, by key (see [FaroForm.customValues]).
  * @property attachments Up to [MAX_ATTACHMENTS] images (see [FaroAttachment]).
  * @property subject Overrides the subject taken from the first line (up to 120 characters).
- * @property locale The language of the emails the person will get. `null` uses [FaroConfig.locale]
- *   or the device language. Pass [FaroForm.locale] when you drew a [FaroForm].
+ * @property locale The language of the emails the person will get, cut to its base (`"pt-BR"` →
+ *   `"pt"`). `null` uses [FaroConfig.locale] or the device language. Pass [FaroForm.locale] when you
+ *   drew a [FaroForm] ([FaroForm.request] does).
  * @property extraDevice Your own facts to travel with the device ones (for example `"plan" to "pro"`).
  *   Faro keeps 12 entries in total of up to 120 characters; the SDK's come first. Never put keys,
  *   tokens, account names or personal data here.

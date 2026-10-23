@@ -239,17 +239,9 @@ internal class HelpModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(issues = found, notice = Notice.CHECK_FIELDS, issueSignal = it.issueSignal + 1) }
             return
         }
-        val hasName = form.field(FaroForm.NAME) != null
-        val request = FaroRequest(
-            kind = s.kind!!,
-            message = s.values[FaroForm.MESSAGE].orEmpty(),
-            email = s.values[FaroForm.EMAIL]?.trim(),
-            name = if (hasName) s.values[FaroForm.NAME]?.trim() else null,
-            fields = form.customValues(s.values),
-            attachments = s.attachments,
-            locale = form.locale,
-            extraDevice = options.extraDevice,
-        )
+        // The name as the person left it: off in the form or emptied, no name (not the identified one).
+        val request = form.request(s.kind!!, s.values + (FaroForm.NAME to s.values[FaroForm.NAME].orEmpty()), s.attachments)
+            .copy(extraDevice = options.extraDevice)
         _state.update { it.copy(phase = Phase.SENDING, notice = null, issues = emptyMap()) }
         sending = viewModelScope.launch {
             try {

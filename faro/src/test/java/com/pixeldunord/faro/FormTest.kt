@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -144,5 +145,83 @@ class FormTest {
         val form = FaroForm.parse(json, "en")
         val values = form.customValues(mapOf("plan" to " pro ", "ok" to "", "x" to "", "email" to "a@b.co"))
         assertEquals(mapOf("plan" to "pro"), values)
+    }
+
+    // ---- built by hand, fallback, request --------------------------------------------------------
+
+    @Test
+    fun aFormBuiltByHandWorksLikeFaros() {
+        val form = FaroForm(
+            locale = "es",
+            fields = listOf(
+                FaroField(FaroForm.MESSAGE, FaroFieldType.TEXTAREA, label = "Mensaje", required = true),
+                FaroField(FaroForm.EMAIL, FaroFieldType.EMAIL, required = true),
+                FaroField("where", FaroFieldType.SELECT, options = listOf(FaroOption("online", "En línea"), FaroOption("shop"))),
+            ),
+            kinds = listOf(FaroKind.PROBLEM, FaroKind.PROBLEM),
+            title = "Ayuda",
+        )
+        assertEquals(listOf("es"), form.locales)
+        assertEquals(listOf(FaroKind.PROBLEM), form.kinds)
+        assertEquals("shop", form.field("where")!!.options[1].label)
+        assertFalse(form.isCached)
+        assertEquals(FaroIssue.INVALID, form.validate(FaroKind.PROBLEM, mapOf("message" to "Hello", "email" to "a@b.co", "where" to "moon"))["where"])
+        assertTrue(form.validate(FaroKind.PROBLEM, mapOf("message" to "Hello", "email" to "a@b.co", "where" to "online")).isEmpty())
+        // One language only: it comes back as it is.
+        assertSame(form, form.inLocale("en"))
+        // Without kinds, all three.
+        assertEquals(FaroKind.entries, FaroForm(locale = "en", fields = emptyList(), kinds = emptyList()).kinds)
+    }
+
+    @Test
+    fun theFallbackAsksTheEssentialsAndFollowsTheLanguage() {
+        val form = FaroForm.fallback("es-CO")
+        assertEquals("es", form.locale)
+        assertEquals(listOf("message", "email", "name"), form.fields.map { it.key })
+        assertTrue(form.field(FaroForm.MESSAGE)!!.required)
+        assertTrue(form.field(FaroForm.EMAIL)!!.required)
+        assertFalse(form.field(FaroForm.NAME)!!.required)
+        assertEquals(FaroKind.entries, form.kinds)
+        assertEquals("", form.title)
+        assertEquals("en", form.inLocale("en-US").locale)
+        assertFalse(FaroForm.fallback().locale.isEmpty())
+    }
+
+    @Test
+    fun requestTakesTheBuiltInsAndTheCustomAnswers() {
+        val form = FaroForm.parse(fixture(), "en")
+        val request = form.request(
+            FaroKind.QUESTION,
+            mapOf("message" to "  How do I play?  ", "email" to " ana@example.com ", "name" to " Ana ", "where" to "online", "stray" to "x"),
+        )
+        assertEquals(FaroKind.QUESTION, request.kind)
+        assertEquals("How do I play?", request.message)
+        assertEquals("ana@example.com", request.email)
+        assertEquals("Ana", request.name)
+        assertEquals(mapOf("where" to "online"), request.fields)
+        assertEquals("en", request.locale)
+        assertTrue(request.attachments.isEmpty())
+    }
+
+    @Test
+    fun requestKeepsTheNameAsThePersonLeftIt() {
+        val withName = FaroForm.parse(fixture(), "en")
+        // Emptied by the person: no name (not the identified one).
+        assertEquals("", withName.request(FaroKind.PROBLEM, mapOf("message" to "Hi there", "name" to "  ")).name)
+        // Never asked by your screen: null, so send() may use the identified person's.
+        assertNull(withName.request(FaroKind.PROBLEM, mapOf("message" to "Hi there")).name)
+        // Turned off in the form: no name, whatever was typed.
+        val off = FaroForm.parse(JSONObject("""{"locales":["en"],"name":"off"}"""), "en")
+        assertEquals("", off.request(FaroKind.PROBLEM, mapOf("message" to "Hi there", "name" to "Ana")).name)
+        assertNull(off.request(FaroKind.PROBLEM, mapOf("message" to "Hi there", "email" to " ")).email)
+    }
+
+    @Test
+    fun languagesAreCutToTheirBase() {
+        assertEquals("pt", FaroLocale.language("pt-BR"))
+        assertEquals("es", FaroLocale.language("es_CO"))
+        assertEquals("en", FaroLocale.language(" EN "))
+        assertFalse(FaroLocale.language(null).isEmpty())
+        assertFalse(FaroLocale.language("").isEmpty())
     }
 }

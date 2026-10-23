@@ -11,7 +11,8 @@ import org.json.JSONObject
  * without shipping a release. Draw [fields] in order; that is the whole form.
  *
  * Get one with [FaroClient.form] (network first, then the copy cached on disk) or
- * [FaroClient.cachedForm] (instant, may be `null`).
+ * [FaroClient.cachedForm] (instant, may be `null`). When Faro cannot be reached and nothing is
+ * cached, draw [fallback], or build your own with the public constructor.
  *
  * Texts the team left empty come as `""`: use your own fallback then (the ready-made screen in
  * `faro-ui` does).
@@ -38,13 +39,49 @@ public class FaroForm internal constructor(
     public val fields: List<FaroField>,
     /** True when this copy came from the disk cache because Faro could not be reached. */
     public val isCached: Boolean,
-    internal val definition: FormDefinition,
+    /** Every language at once, for [inLocale]; `null` for a form built by hand. */
+    internal val definition: FormDefinition?,
 ) {
+    /**
+     * A form built by hand: your own fields and texts, for example to draw when Faro cannot be
+     * reached (see [fallback] for a minimal one). [validate], [customValues] and [request] work on it
+     * like on Faro's.
+     *
+     * @param locale The language of the texts (and of the emails, through [request]).
+     * @param fields The fields in order: [NAME], [EMAIL], [MESSAGE] and custom ones.
+     * @param kinds The kinds on offer; empty means all three.
+     */
+    public constructor(
+        locale: String,
+        fields: List<FaroField>,
+        kinds: List<FaroKind> = FaroKind.entries,
+        title: String = "",
+        intro: String = "",
+        submit: String = "",
+        success: String = "",
+        locales: List<String> = listOf(locale),
+        isCached: Boolean = false,
+    ) : this(
+        locale = locale,
+        locales = locales.ifEmpty { listOf(locale) },
+        title = title,
+        intro = intro,
+        submit = submit,
+        success = success,
+        kinds = kinds.distinct().ifEmpty { FaroKind.entries },
+        fields = fields,
+        isCached = isCached,
+        definition = null,
+    )
+
     /** The field with this [key], or `null`. */
     public fun field(key: String): FaroField? = fields.firstOrNull { it.key == key }
 
-    /** The same form in another language (no network). */
-    public fun inLocale(locale: String): FaroForm = definition.resolve(locale, isCached)
+    /**
+     * The same form in another language (no network), resolved like [FaroClient.form] does. A form
+     * built by hand has a single language and comes back unchanged; [fallback] follows the language.
+     */
+    public fun inLocale(locale: String): FaroForm = definition?.resolve(locale, isCached) ?: this
 
     /**
      * Runs the same checks Faro runs, so a mistake is shown before spending a round trip (Faro also
@@ -64,6 +101,34 @@ public class FaroForm internal constructor(
         }
         return issues
     }
+
+    /**
+     * The request for what was typed: [MESSAGE], [EMAIL] and [NAME] go to their own properties, the
+     * custom answers to [FaroRequest.fields] (see [customValues]), and [locale] becomes the language of
+     * the emails. Values are trimmed.
+     *
+     * The name follows what the person saw: with the name turned off in the form it is `""` (no name,
+     * not even the [identified][Faro.identify] person's); typed empty, it is `""` too; only when
+     * [values] has no [NAME] at all is it `null`, which lets [FaroClient.send] use the identified
+     * person's name.
+     *
+     * @param kind The chosen kind.
+     * @param values Everything typed, by field key (as for [validate]).
+     * @param attachments Up to [FaroRequest.MAX_ATTACHMENTS] pictures.
+     */
+    public fun request(
+        kind: FaroKind,
+        values: Map<String, String>,
+        attachments: List<FaroAttachment> = emptyList(),
+    ): FaroRequest = FaroRequest(
+        kind = kind,
+        message = values[MESSAGE]?.trim().orEmpty(),
+        email = values[EMAIL]?.trim()?.takeIf { it.isNotEmpty() },
+        name = if (field(NAME) == null) "" else values[NAME]?.trim(),
+        fields = customValues(values),
+        attachments = attachments,
+        locale = locale,
+    )
 
     /**
      * The custom answers ready for [FaroRequest.fields]: built-in keys left out, empty values
@@ -108,29 +173,48 @@ public class FaroForm internal constructor(
          */
         public fun parse(json: JSONObject, locale: String): FaroForm =
             FormDefinition.parse(json).resolve(locale, cached = false)
+
+        /**
+         * A minimal form for when Faro cannot be reached and nothing is cached: the three kinds, the
+         * message, the email and an optional name, without texts (use your own labels). Its
+         * [inLocale] follows the language.
+         *
+         * @param locale The language for the emails; `null` uses the device's. Cut to its base.
+         */
+        @JvmStatic
+        @JvmOverloads
+        public fun fallback(locale: String? = null): FaroForm =
+            FALLBACK.resolve(FaroLocale.language(locale), cached = false)
+
+        private val FALLBACK: FormDefinition by lazy {
+            FormDefinition.parse(JSONObject().put("order", JSONArray(listOf(MESSAGE, EMAIL, NAME))))
+        }
     }
 }
 
-/** A field of the form. */
-public class FaroField internal constructor(
+/**
+ * A field of the form. Faro's come resolved in [FaroForm.fields]; build your own for a
+ * [hand-made form][FaroForm].
+ */
+public class FaroField(
     /** The key the answer travels under (`name`, `email`, `message` or the custom key). */
     public val key: String,
     /** How to ask it. */
     public val type: FaroFieldType,
     /** The question. May be `""` for the built-in fields: use your own then. */
-    public val label: String,
+    public val label: String = "",
     /** Hint shown inside the empty input. */
-    public val placeholder: String,
+    public val placeholder: String = "",
     /** A line under the input. */
-    public val help: String,
+    public val help: String = "",
     /** Whether it must be answered (a required checkbox must be checked). */
-    public val required: Boolean,
+    public val required: Boolean = false,
     /** The choices of a [FaroFieldType.SELECT] field, in order. */
-    public val options: List<FaroOption>,
+    public val options: List<FaroOption> = emptyList(),
     /** Headings that group [options] (each option names its group); often empty. */
-    public val groups: List<FaroOptionGroup>,
+    public val groups: List<FaroOptionGroup> = emptyList(),
     /** The team asked for a half-width input (two side by side on wide screens). */
-    public val halfWidth: Boolean,
+    public val halfWidth: Boolean = false,
 ) {
     /** True for [FaroForm.NAME], [FaroForm.EMAIL] and [FaroForm.MESSAGE]. */
     public val isBuiltIn: Boolean
@@ -217,17 +301,17 @@ public enum class FaroFieldType {
 }
 
 /** A choice of a list: [value] is sent, [label] is read. */
-public class FaroOption internal constructor(
+public class FaroOption(
     public val value: String,
-    public val label: String,
+    public val label: String = value,
     /** The [FaroOptionGroup.key] it belongs to, or `null`. */
-    public val group: String?,
+    public val group: String? = null,
 ) {
     override fun toString(): String = "FaroOption($value)"
 }
 
 /** A heading over some options of a list. */
-public class FaroOptionGroup internal constructor(public val key: String, public val label: String)
+public class FaroOptionGroup(public val key: String, public val label: String)
 
 /** Why a field is not ready to send. Your UI words it. */
 public enum class FaroIssue {
@@ -344,7 +428,7 @@ internal class FormDefinition(
         }
         return FaroForm(
             locale = locale,
-            locales = locales,
+            locales = locales.ifEmpty { listOf(locale) },
             title = t(title),
             intro = t(intro),
             submit = t(submit),

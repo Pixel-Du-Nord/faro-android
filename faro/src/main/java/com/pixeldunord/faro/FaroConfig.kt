@@ -1,5 +1,7 @@
 package com.pixeldunord.faro
 
+import java.util.Locale
+
 /**
  * How the SDK reaches your Faro organization.
  *
@@ -12,9 +14,10 @@ package com.pixeldunord.faro
  * @property app The slug of the application in Faro (**Organization → Applications**). Requests are
  *   then grouped by app in the panel and, if the app has its own request form, that form is the one
  *   drawn and validated. `null` uses the organization's form.
- * @property locale The language your app is shown in (`"es"`, `"en"`, `"pt-BR"`…). It picks the form
- *   texts and the language of the emails the person receives. `null` uses the device language. If your
- *   app lets people pick a language, pass that one, not the phone's.
+ * @property locale The language your app is shown in (`"es"`, `"en"`, `"pt-BR"`…), used when a call
+ *   does not name one. It picks the form texts and the language of the emails the person receives.
+ *   `null` uses the device language. If your app lets people pick a language, pass that one with each
+ *   call ([FaroClient.form], [FaroRequest.locale]) instead of configuring again.
  * @property apiUrl Faro's API. Only change it for a self-hosted or staging Faro.
  */
 public data class FaroConfig(
@@ -40,8 +43,8 @@ public data class FaroConfig(
  * Who is using the app, as far as support is concerned. Set it with [Faro.identify].
  *
  * - [email] and [name] prefill the form, so a signed-in person does not type them again.
- * - [id] is your own user id. Sent alone it travels with the device facts (`userId`) so your team can
- *   look the person up.
+ * - [id] is your own user id, optional. Sent alone it travels with the device facts (`userId`) so
+ *   your team can look the person up.
  * - With [signature] (an HMAC-SHA256 of [id] made by **your server** with the organization's identity
  *   secret, see Faro's "Signed identity" guide) Faro trusts the person: the email counts as confirmed,
  *   they get an acknowledgement and the request is linked to their contact. Never ship the secret
@@ -55,4 +58,17 @@ public data class FaroUser(
 ) {
     /** True when Faro can verify this person ([id] and [signature] are both set). */
     val isSigned: Boolean get() = !id.isNullOrBlank() && !signature.isNullOrBlank()
+}
+
+/** Language helpers shared by the core and the UI. */
+public object FaroLocale {
+    /**
+     * The base language of a locale tag, lowercased: `"pt-BR"` → `"pt"`, `"es_CO"` → `"es"`. `null`
+     * or blank gives the device's language. This is what travels to Faro as the request language.
+     */
+    @JvmStatic
+    public fun language(identifier: String?): String {
+        val raw = identifier?.takeIf { it.isNotBlank() } ?: Locale.getDefault().toLanguageTag()
+        return raw.trim().replace('_', '-').substringBefore('-').lowercase(Locale.ROOT).ifEmpty { "en" }
+    }
 }

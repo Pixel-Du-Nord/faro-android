@@ -1,5 +1,7 @@
 # JitPack builds the two libraries from the repository root (this folder).
 # Coordinates: com.github.Pixel-Du-Nord.faro-android:faro:<tag> and :faro-ui:<tag>.
+# The group is set in build.gradle.kts (faro.group in gradle.properties), not taken from JitPack's
+# GROUP, and only POMs are published (no Gradle Module Metadata): see build.gradle.kts.
 jdk:
   - openjdk17
 install:

@@ -4,6 +4,44 @@ All notable changes to Faro for Android. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-22
+
+### Fixed
+
+- Calling `Faro.configure` again no longer cancels the client: it updates the same `FaroClient`
+  (configuration and form cache), so one already kept by a `ViewModel` keeps working. Before, a
+  `send` on the old client failed with a silent cancellation. A proof made for another key or API is
+  dropped.
+- A `send` waiting for a proof that `cancelPending()` (or a new key) stopped makes another one instead
+  of failing with a cancellation.
+- `FaroRequest.name = ""` sends no name, even for an identified person (before, an empty name took
+  the identified person's). `null` still uses it.
+- Publishing: the group is fixed to `com.github.Pixel-Du-Nord.faro-android` (JitPack's `GROUP` is no
+  longer used) and only POMs are published, without Gradle Module Metadata, whose component JitPack
+  rewrote to `com.github.Pixel-Du-Nord:faro-android`.
+
+### Added
+
+- `FaroForm(locale, fields, kinds, title, intro, submit, success, …)`: a form built by hand, and
+  public constructors for `FaroField`, `FaroOption` and `FaroOptionGroup`.
+- `FaroForm.fallback(locale)`: a minimal form (the three kinds, message, email, optional name) for
+  when Faro cannot be reached and nothing is cached. Its `inLocale` follows the language.
+- `FaroForm.request(kind, values, attachments)`: the `FaroRequest` for what was typed, in the form's
+  language; with the name turned off in the form, or emptied, the request has no name.
+- `FaroLocale.language(tag)`: the base language of a tag (`pt-BR` → `pt`).
+- The `sdk` device fact (`faro-android 1.0.1`), as on iOS.
+
+### Changed
+
+- After a request gets in, the next proof of work starts right away (as on iOS), so "send another"
+  does not wait.
+- `cancelPending()` stops only a proof being solved; a solved one is kept for the next request.
+- The request language and `FaroClient.defaultLocale` are cut to the base language (`es-CO` → `es`),
+  as on iOS.
+- Shake to report opens with "Something's wrong" already chosen (as on iOS), unless other
+  `FaroHelpOptions` are passed.
+- The README no longer suggests configuring again to change the language: pass it with each call.
+
 ## [1.0.0] - 2026-10-22
 
 First public release.
@@ -42,3 +80,6 @@ First public release.
 - Accessible: TalkBack labels, headings, live regions, 48 dp targets, large-text layouts, reduced
   motion respected.
 - Optional `Faro.enableShakeToReport(activity)`.
+
+[1.0.1]: https://github.com/Pixel-Du-Nord/faro-android/releases/tag/1.0.1
+[1.0.0]: https://github.com/Pixel-Du-Nord/faro-android/releases/tag/1.0.0

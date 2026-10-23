@@ -11,12 +11,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.pixeldunord.faro.Faro
+import com.pixeldunord.faro.FaroKind
 import kotlin.math.sqrt
 
 /**
  * Opens the help screen when the person shakes the phone while [activity] is on screen, with the
- * screenshot of what they were looking at. It follows the activity's lifecycle (listens only while
- * resumed, stops when destroyed); call it once in `onCreate`.
+ * screenshot of what they were looking at and "Something's wrong" already chosen (a shake usually
+ * means a problem; pass your own [options] to change it). It follows the activity's lifecycle
+ * (listens only while resumed, stops when destroyed); call it once in `onCreate`.
  *
  * ```kotlin
  * override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,7 +31,7 @@ import kotlin.math.sqrt
  */
 public fun Faro.enableShakeToReport(
     activity: ComponentActivity,
-    options: FaroHelpOptions = FaroHelpOptions(),
+    options: FaroHelpOptions = FaroHelpOptions(initialKind = FaroKind.PROBLEM),
     theme: FaroTheme = FaroTheme(),
 ): FaroShake = FaroShake(activity, options, theme).also { it.attach() }
 

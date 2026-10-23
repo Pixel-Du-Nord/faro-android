@@ -6,13 +6,16 @@ import com.pixeldunord.faro.internal.FormStore
 import com.pixeldunord.faro.internal.HttpResponse
 import com.pixeldunord.faro.internal.Transport
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.After
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -32,6 +35,7 @@ class ClientTest {
     /** A fake Faro: puzzles with a small known answer and scripted answers to POST. */
     private class FakeFaro : Transport {
         var challenges = 0
+        val challengeUrls = mutableListOf<String>()
         val posts = mutableListOf<Pair<String?, ByteArray>>()
         val postAnswers = ArrayDeque<() -> HttpResponse>()
         var config: () -> HttpResponse = { HttpResponse(200, """{"widget":{"settings":{"requestForm":{"locales":["en"],"title":{"en":"Hi"}}}}}""") }
@@ -42,6 +46,7 @@ class ClientTest {
             return when {
                 url.contains("/widget/challenge") -> {
                     challenges++
+                    challengeUrls += url
                     val salt = "salt$challenges?t=1&k=wk_test&"
                     val n = 7 + challenges
                     val challenge = MessageDigest.getInstance("SHA-256").digest("$salt$n".toByteArray())
@@ -67,10 +72,11 @@ class ClientTest {
         user: FaroUser? = null,
         crumbs: Breadcrumbs = Breadcrumbs(now = { 100_000 }),
         app: String? = "parques",
+        config: FaroConfig = FaroConfig(key = "wk_test", app = app, locale = "es"),
     ): FaroClient {
         val dispatcher = StandardTestDispatcher(testScheduler)
         return FaroClient(
-            config = FaroConfig(key = "wk_test", app = app, locale = "es"),
+            config = config,
             transport = faro,
             store = store,
             collectDevice = { mapOf("appVersion" to "2.3.0", "build" to "241", "os" to "Android", "model" to "Pixel 8") },
@@ -136,9 +142,10 @@ class ClientTest {
         }
         val before = testScheduler.currentTime
         client.send(request.copy(fields = mapOf("where" to "online")))
-        assertEquals("one puzzle for both tries", 1, faro.challenges)
         assertEquals("no second wait", before, testScheduler.currentTime)
         assertEquals(2, faro.posts.size)
+        val proofs = faro.posts.map { JSONObject(String(it.second)).getJSONObject("proof").getString("signature") }
+        assertEquals("one puzzle for both tries", listOf("s1", "s1"), proofs)
     }
 
     @Test
@@ -167,12 +174,151 @@ class ClientTest {
     }
 
     @Test
-    fun aSuccessSpendsTheProof() = runTest {
+    fun aSuccessSpendsTheProofAndPreparesTheNext() = runTest {
         val faro = FakeFaro()
         val client = client(faro)
         client.send(request)
+        // The next puzzle is asked for right after the success, without anyone calling prepare().
+        testScheduler.advanceUntilIdle()
+        assertEquals(2, faro.challenges)
+        testScheduler.advanceTimeBy(5_000)
+        val before = testScheduler.currentTime
+        client.send(request)
+        assertEquals("the prepared proof is old enough: no wait", before, testScheduler.currentTime)
+        val proofs = faro.posts.map { JSONObject(String(it.second)).getJSONObject("proof").getString("signature") }
+        assertEquals(listOf("s1", "s2"), proofs)
+    }
+
+    // ---- reconfiguring (Faro.configure called again) -------------------------------------------
+
+    @After
+    fun forgetTheSharedClient() = Faro.reset()
+
+    @Test
+    fun configuringAgainUpdatesTheSameClientInsteadOfKillingIt() = runTest {
+        val faro = FakeFaro()
+        val held = Faro.install(FaroConfig(key = "wk_test", app = "parques"), MemoryStore()) { client(faro) }
+        assertSame(held, Faro.client)
+
+        // Like a ViewModel that kept the client across a language switch or a settings change.
+        val again = Faro.install(FaroConfig(key = "wk_other", app = "dynamo", locale = "en-GB"), MemoryStore()) {
+            error("a second client must not be built")
+        }
+        assertSame(held, again)
+        assertEquals("wk_other", held.config.key)
+        assertEquals("en", held.defaultLocale)
+
+        val ticket = held.send(request)
+        assertEquals(42, ticket.number)
+        val body = faro.lastJson()
+        assertEquals("wk_other", body.getString("key"))
+        assertEquals("dynamo", body.getString("app"))
+        assertEquals("en", body.getString("locale"))
+        assertTrue(faro.challengeUrls.single().contains("key=wk_other"))
+    }
+
+    @Test
+    fun aNewKeyDropsTheProofAndTheSendStillWorks() = runTest {
+        val faro = FakeFaro()
+        val client = Faro.install(FaroConfig(key = "wk_test"), MemoryStore()) { client(faro) }
+        client.prepare()
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, faro.challenges)
+        Faro.install(FaroConfig(key = "wk_other"), MemoryStore()) { error("no new client") }
         client.send(request)
         assertEquals(2, faro.challenges)
+        assertTrue(faro.challengeUrls.last().contains("key=wk_other"))
+        assertEquals("s2", faro.lastJson().getJSONObject("proof").getString("signature"))
+    }
+
+    @Test
+    fun theSameKeyKeepsTheProof() = runTest {
+        val faro = FakeFaro()
+        val client = Faro.install(FaroConfig(key = "wk_test", locale = "es"), MemoryStore()) { client(faro) }
+        client.prepare()
+        testScheduler.advanceUntilIdle()
+        Faro.install(FaroConfig(key = "wk_test", locale = "pt"), MemoryStore()) { error("no new client") }
+        client.send(request)
+        assertEquals(1, faro.challenges)
+        assertEquals("pt", faro.lastJson().getString("locale"))
+    }
+
+    @Test
+    fun configuringAgainSwapsTheDiskCopy() = runTest {
+        val faro = FakeFaro()
+        val first = MemoryStore()
+        val second = MemoryStore("""{"locales":["en"],"title":{"en":"Other app"}}""")
+        val client = Faro.install(FaroConfig(key = "wk_test", app = "parques"), first) { client(faro, store = first) }
+        client.form("en")
+        assertNotNull(first.value)
+        Faro.install(FaroConfig(key = "wk_test", app = "dynamo"), second) { error("no new client") }
+        assertEquals("Other app", client.cachedForm("en")?.title)
+    }
+
+    // ---- cancelPending -------------------------------------------------------------------------
+
+    @Test
+    fun aSendWaitingForACancelledProofMakesAnother() = runTest {
+        val faro = FakeFaro()
+        val client = client(faro)
+        val sending = async { client.send(request) }
+        testScheduler.runCurrent() // the send is now waiting for the proof
+        client.cancelPending() // for example the screen closed, or another key was configured
+        assertEquals(42, sending.await().number)
+        assertEquals(1, faro.posts.size)
+    }
+
+    @Test
+    fun cancelPendingKeepsASolvedProof() = runTest {
+        val faro = FakeFaro()
+        val client = client(faro)
+        client.prepare()
+        testScheduler.advanceUntilIdle()
+        client.cancelPending()
+        client.send(request)
+        assertEquals(1, faro.challenges)
+    }
+
+    // ---- name and language ---------------------------------------------------------------------
+
+    @Test
+    fun anEmptyNameSendsNoNameEvenForAnIdentifiedPerson() = runTest {
+        val faro = FakeFaro()
+        val user = FaroUser(id = "u-1", email = "luis@example.com", name = "Luis")
+        client(faro, user = user).send(request.copy(name = ""))
+        assertEquals("", faro.lastJson().getString("name"))
+        client(faro, user = user).send(request.copy(name = "   "))
+        assertEquals("", faro.lastJson().getString("name"))
+        client(faro, user = user).send(request.copy(name = null))
+        assertEquals("Luis", faro.lastJson().getString("name"))
+        client(faro, user = user).send(request.copy(name = " Ana "))
+        assertEquals("Ana", faro.lastJson().getString("name"))
+    }
+
+    @Test
+    fun aFormWithTheNameOffSendsNoName() = runTest {
+        val faro = FakeFaro()
+        val form = FaroForm.parse(JSONObject("""{"locales":["en"],"name":"off"}"""), "en")
+        val user = FaroUser(id = "u-1", email = "luis@example.com", name = "Luis")
+        client(faro, user = user).send(form.request(FaroKind.PROBLEM, mapOf("message" to "It broke")))
+        val body = faro.lastJson()
+        assertEquals("", body.getString("name"))
+        assertEquals("luis@example.com", body.getString("email"))
+        assertEquals("en", body.getString("locale"))
+    }
+
+    @Test
+    fun theLanguageIsCutToItsBase() = runTest {
+        val faro = FakeFaro()
+        client(faro).send(request.copy(locale = "pt-BR"))
+        assertEquals("pt", faro.lastJson().getString("locale"))
+        client(faro, config = FaroConfig(key = "wk_test", locale = "es_CO")).send(request)
+        assertEquals("es", faro.lastJson().getString("locale"))
+    }
+
+    @Test
+    fun theDeviceFactsNameTheSdk() {
+        assertEquals("faro-android ${Faro.VERSION}", DeviceFacts.SDK)
     }
 
     @Test

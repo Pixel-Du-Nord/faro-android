@@ -2,6 +2,7 @@ package com.pixeldunord.faro.internal
 
 import android.content.Context
 import android.os.Build
+import com.pixeldunord.faro.BuildConfig
 import java.util.Locale
 import java.util.TimeZone
 
@@ -33,8 +34,12 @@ internal object DeviceFacts {
             "locale" to Locale.getDefault().toLanguageTag(),
             "timezone" to TimeZone.getDefault().id,
             "screen" to screen,
+            "sdk" to SDK,
         ).filterValues { it.isNotBlank() }
     }
+
+    /** Which SDK filed the request, as the iOS SDK says it (`faro-ios 1.0.1`). */
+    val SDK: String = "faro-android ${BuildConfig.FARO_VERSION}"
 
     /**
      * The `device` object of a request: the SDK's facts first, then the breadcrumb [trail] and the

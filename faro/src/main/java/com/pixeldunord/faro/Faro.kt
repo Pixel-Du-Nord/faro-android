@@ -6,6 +6,7 @@ import android.os.SystemClock
 import com.pixeldunord.faro.internal.Breadcrumbs
 import com.pixeldunord.faro.internal.DeviceFacts
 import com.pixeldunord.faro.internal.FileFormStore
+import com.pixeldunord.faro.internal.FormStore
 import com.pixeldunord.faro.internal.UrlConnectionTransport
 import kotlinx.coroutines.Dispatchers
 import java.io.File
@@ -34,38 +35,50 @@ public object Faro {
     private val trail = Breadcrumbs()
 
     /**
-     * Sets up the SDK. Calling it again replaces the configuration (for example when the person
-     * switches the app's language).
+     * Sets up the SDK. Call it once, early (in `Application.onCreate`).
      *
-     * @return The new [client].
+     * Calling it again (for example with another key in a debug menu) updates the SAME client: every
+     * [FaroClient] you already hold, such as one kept by a `ViewModel`, keeps working with the new
+     * configuration. A proof of work made for another key or API is dropped. The language does not
+     * need a new configuration: pass it with each call ([FaroClient.form], [FaroRequest.locale]).
+     *
+     * @return The [client] (always the same instance).
      */
     @JvmStatic
     public fun configure(context: Context, config: FaroConfig): FaroClient {
         val app = context.applicationContext
-        val pkg = runCatching {
-            @Suppress("DEPRECATION")
-            app.packageManager.getPackageInfo(app.packageName, 0)
-        }.getOrNull()
-        val userAgent = "FaroAndroid/$VERSION (Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) " +
-            "${app.packageName}/${pkg?.versionName ?: "0"}"
-        val directory = File(app.noBackupFilesDir, "faro")
-        val client = FaroClient(
-            config = config,
-            transport = UrlConnectionTransport(userAgent),
-            store = FileFormStore(directory, config.key, config.app),
-            collectDevice = { DeviceFacts.collect(app) },
-            breadcrumbs = trail,
-            user = { identified },
-            clock = SystemClock::elapsedRealtime,
-            wallClock = System::currentTimeMillis,
-            io = Dispatchers.IO,
-            cpu = Dispatchers.Default,
-        )
-        synchronized(this) {
-            current?.close()
-            current = client
+        val store = FileFormStore(File(app.noBackupFilesDir, "faro"), config.key, config.app)
+        return install(config, store) {
+            val pkg = runCatching {
+                @Suppress("DEPRECATION")
+                app.packageManager.getPackageInfo(app.packageName, 0)
+            }.getOrNull()
+            val userAgent = "FaroAndroid/$VERSION (Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) " +
+                "${app.packageName}/${pkg?.versionName ?: "0"}"
+            FaroClient(
+                config = config,
+                transport = UrlConnectionTransport(userAgent),
+                store = store,
+                collectDevice = { DeviceFacts.collect(app) },
+                breadcrumbs = trail,
+                user = { identified },
+                clock = SystemClock::elapsedRealtime,
+                wallClock = System::currentTimeMillis,
+                io = Dispatchers.IO,
+                cpu = Dispatchers.Default,
+            )
         }
-        return client
+    }
+
+    /** The first call builds the client; later ones update it in place, so nobody holds a stale one. */
+    internal fun install(config: FaroConfig, store: FormStore, build: () -> FaroClient): FaroClient =
+        synchronized(this) {
+            current?.also { it.update(config, store) } ?: build().also { current = it }
+        }
+
+    /** Forgets the client (tests only). */
+    internal fun reset() {
+        synchronized(this) { current = null }
     }
 
     /** True once [configure] was called. */

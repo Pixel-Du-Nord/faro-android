@@ -55,7 +55,6 @@ import com.pixeldunord.faro.Faro
 import com.pixeldunord.faro.FaroException
 import com.pixeldunord.faro.FaroForm
 import com.pixeldunord.faro.FaroKind
-import com.pixeldunord.faro.FaroRequest
 import com.pixeldunord.faro.ui.FaroDarkMode
 import com.pixeldunord.faro.ui.FaroHelpActivity
 import com.pixeldunord.faro.ui.FaroHelpOptions
@@ -89,7 +88,8 @@ class MainActivity : ComponentActivity() {
             FaroDarkMode.SYSTEM -> enableEdgeToEdge()
         }
         super.onCreate(savedInstanceState)
-        Faro.enableShakeToReport(this, helpOptions())
+        // A shake usually means a problem: open with that kind unless the launch named another.
+        Faro.enableShakeToReport(this, helpOptions().let { it.copy(initialKind = it.initialKind ?: FaroKind.PROBLEM) })
         val open = intent.getStringExtra("open")
         if (savedInstanceState == null && open == "activity") {
             window.decorView.post { FaroHelpActivity.start(this, helpOptions(), activityTheme()) }
@@ -266,12 +266,17 @@ private fun CoreForm(onBack: () -> Unit) {
     var message by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var form by remember { mutableStateOf<FaroForm?>(Faro.client.cachedForm()) }
+    // The saved copy at once; without one, the SDK's minimal form until Faro answers.
+    var form by remember { mutableStateOf(Faro.client.cachedForm() ?: FaroForm.fallback(Faro.client.defaultLocale)) }
 
     // Start the 3-second anti-spam clock and refresh the form as soon as the screen opens.
     androidx.compose.runtime.LaunchedEffect(Unit) {
         Faro.client.prepare()
         form = runCatching { Faro.client.form() }.getOrNull() ?: form
+    }
+    // Leaving the screen: stop a proof still being solved (a solved one is kept).
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { Faro.client.cancelPending() }
     }
 
     Column(
@@ -284,10 +289,10 @@ private fun CoreForm(onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         OutlinedButton(onClick = onBack) { Text("Back") }
-        Text(form?.title?.ifEmpty { null } ?: "My own form", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Kinds offered by the form: ${form?.kinds?.joinToString { it.wire } ?: "…"}", style = MaterialTheme.typography.bodySmall)
+        Text(form.title.ifEmpty { "My own form" }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("Kinds offered by the form: ${form.kinds.joinToString { it.wire }}", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            (form?.kinds ?: FaroKind.entries).forEach { k ->
+            form.kinds.forEach { k ->
                 FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(k.wire) })
             }
         }
@@ -300,7 +305,10 @@ private fun CoreForm(onBack: () -> Unit) {
                 status = "Sending…"
                 scope.launch {
                     status = try {
-                        val ticket = Faro.client.send(FaroRequest(kind = kind, message = message, email = email, locale = form?.locale))
+                        // This screen does not ask the name: with the name on in the form, send() uses the
+                        // identified person's; with it off, the request goes without one.
+                        val request = form.request(kind, mapOf(FaroForm.EMAIL to email, FaroForm.MESSAGE to message))
+                        val ticket = Faro.client.send(request)
                         "Sent: request #${ticket.number} (replies to ${ticket.email})"
                     } catch (e: FaroException.InvalidForm) {
                         "Fix the field «${e.field}»"

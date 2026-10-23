@@ -17,15 +17,15 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URLEncoder
-import java.util.Locale
 import java.util.UUID
 
 /**
@@ -50,10 +50,9 @@ import java.util.UUID
  * ```
  */
 public class FaroClient internal constructor(
-    /** The configuration this client was made with. */
-    public val config: FaroConfig,
+    config: FaroConfig,
     private val transport: Transport,
-    private val store: FormStore,
+    store: FormStore,
     private val collectDevice: () -> Map<String, String>,
     private val breadcrumbs: Breadcrumbs,
     private val user: () -> FaroUser?,
@@ -67,9 +66,39 @@ public class FaroClient internal constructor(
     private var proofJob: Deferred<Proof?>? = null
     private val sending = Mutex()
 
-    /** The language used when none is given: [FaroConfig.locale] or the device's. */
+    /** The configuration and the disk copy that goes with it, swapped together by [update]. */
+    private class Setup(val config: FaroConfig, val store: FormStore)
+
+    @Volatile
+    private var setup = Setup(config, store)
+
+    /**
+     * The configuration in use. Calling [Faro.configure] again changes it, and this same client
+     * follows: there is never a stale client to throw away.
+     */
+    public val config: FaroConfig get() = setup.config
+
+    private val store: FormStore get() = setup.store
+
+    /**
+     * The language used when none is given: [FaroConfig.locale] or the device's, cut to its base
+     * (`"pt-BR"` → `"pt"`; see [FaroLocale.language]).
+     */
     public val defaultLocale: String
-        get() = config.locale?.takeIf { it.isNotBlank() } ?: Locale.getDefault().toLanguageTag()
+        get() = FaroLocale.language(config.locale)
+
+    /** A new configuration for this client ([Faro.configure] called again). */
+    internal fun update(config: FaroConfig, store: FormStore) {
+        val before = setup.config
+        setup = Setup(config, store)
+        // A puzzle is signed for one key on one server: useless for another.
+        if (before.key != config.key || before.apiUrl != config.apiUrl) {
+            synchronized(lock) {
+                proofJob?.cancel()
+                proofJob = null
+            }
+        }
+    }
 
     // ---- the form -------------------------------------------------------------------------------
 
@@ -92,6 +121,8 @@ public class FaroClient internal constructor(
      * @throws FaroException for any other error Faro answers.
      */
     public suspend fun form(locale: String = defaultLocale): FaroForm {
+        val config = this.config
+        val store = this.store
         val definition = try {
             withContext(io) {
                 val url = "${config.apiUrl.trimEnd('/')}/widget/config?key=${encode(config.key)}" +
@@ -117,7 +148,8 @@ public class FaroClient internal constructor(
      * Asks Faro for an anti-spam puzzle and solves it in the background. Call it when your form
      * opens: Faro rejects a proof used less than 3 seconds after it was asked for, and by the time
      * the person finishes typing that wait is long over. Calling it again while a proof is pending
-     * or ready does nothing. [send] works without it too; it just waits the 3 seconds then.
+     * or ready does nothing. [send] works without it too; it just waits the 3 seconds then. After a
+     * request gets in, the next proof starts on its own.
      */
     public fun prepare() {
         currentProofJob()
@@ -148,6 +180,7 @@ public class FaroClient internal constructor(
 
     /** `GET /widget/challenge` and the search for n. */
     private suspend fun newProof(): Proof {
+        val config = this.config
         val requestedAt = clock()
         val puzzle = withContext(io) {
             call("GET", "${config.apiUrl.trimEnd('/')}/widget/challenge?key=${encode(config.key)}")
@@ -168,8 +201,8 @@ public class FaroClient internal constructor(
      *
      * Uses the proof from [prepare] (or makes one), waits whatever is left of Faro's 3 seconds, and
      * if Faro rejects the proof it retries once with a new one. After a validation error the same
-     * proof is kept for the corrected request. One request at a time: a second call waits for the
-     * first.
+     * proof is kept for the corrected request; after a success the next proof starts right away, so
+     * "send another" does not wait either. One request at a time: a second call waits for the first.
      *
      * Before any network call it checks what can be checked locally (message length, email,
      * attachments) and throws the same errors Faro would, so a typo does not count against Faro's
@@ -184,14 +217,23 @@ public class FaroClient internal constructor(
 
     private suspend fun sendLocked(request: FaroRequest): FaroTicket {
         val prepared = precheck(request)
-        var proof = currentProofJob().await() ?: run { discardProof(); newProof() }
+        val pending = currentProofJob()
+        var proof = try {
+            pending.await()
+        } catch (e: CancellationException) {
+            // The proof was cancelled ([cancelPending], a new key), not this call: make another one.
+            currentCoroutineContext().ensureActive()
+            null
+        } ?: run { discardProof(); newProof() }
         var retried = false
         while (true) {
             val wait = proof.remainingWait(clock())
             if (wait > 0) delay(wait)
             try {
                 val ticket = withContext(io) { post(prepared, proof) }
-                discardProof() // spent: the next request needs a new one
+                // Spent: the next request needs a new one, and it starts solving now.
+                discardProof()
+                prepare()
                 return ticket
             } catch (e: FaroException) {
                 if (e is FaroException.SpamCheck && !retried) {
@@ -221,16 +263,20 @@ public class FaroClient internal constructor(
         )
     }
 
-    /** Cancels the background work (a proof being solved). The client can still be used. */
+    /**
+     * Stops a proof being solved in the background, for example when your screen closes, so it does
+     * not keep the CPU busy. A proof already solved is kept for the next request. The client keeps
+     * working: a later [prepare] or [send] starts a new proof, and a [send] that was waiting for the
+     * cancelled one simply makes another.
+     */
     public fun cancelPending() {
         synchronized(lock) {
-            proofJob?.cancel()
-            proofJob = null
+            val job = proofJob ?: return
+            if (job.isActive) {
+                job.cancel()
+                proofJob = null
+            }
         }
-    }
-
-    internal fun close() {
-        scope.cancel()
     }
 
     // ---- internals ------------------------------------------------------------------------------
@@ -242,6 +288,7 @@ public class FaroClient internal constructor(
         val name: String,
         val locale: String,
         val user: FaroUser?,
+        val config: FaroConfig,
     )
 
     private fun precheck(request: FaroRequest): Prepared {
@@ -256,14 +303,17 @@ public class FaroClient internal constructor(
         if (email.isNotEmpty() && !isValidEmail(email)) throw FaroException.InvalidEmail()
         if (request.attachments.size > FaroRequest.MAX_ATTACHMENTS) throw FaroException.AttachmentTooLarge()
         if (request.attachments.any { it.bytes.size > FaroAttachment.MAX_BYTES }) throw FaroException.AttachmentTooLarge()
-        val name = request.name?.trim()?.takeIf { it.isNotEmpty() } ?: identified?.name?.trim().orEmpty()
-        val locale = request.locale?.takeIf { it.isNotBlank() } ?: defaultLocale
-        return Prepared(request.copy(message = message), email, name, locale, identified)
+        // null: the identified person's name. "" (or blank): no name, even for an identified person.
+        val name = request.name?.trim() ?: identified?.name?.trim().orEmpty()
+        val config = this.config
+        val locale = FaroLocale.language(request.locale?.takeIf { it.isNotBlank() } ?: config.locale)
+        return Prepared(request.copy(message = message), email, name, locale, identified, config)
     }
 
     /** The JSON of `POST /widget/requests` (the `data` part when there are images). */
     internal fun body(prepared: Prepared, proof: Proof): JSONObject {
         val request = prepared.request
+        val config = prepared.config
         val crumbs = breadcrumbs.snapshot()
         val identified = prepared.user
         val device = DeviceFacts.compose(
@@ -305,7 +355,7 @@ public class FaroClient internal constructor(
 
     private fun post(prepared: Prepared, proof: Proof): FaroTicket {
         val data = body(prepared, proof).toString().toByteArray(Charsets.UTF_8)
-        val url = "${config.apiUrl.trimEnd('/')}/widget/requests"
+        val url = "${prepared.config.apiUrl.trimEnd('/')}/widget/requests"
         val attachments = prepared.request.attachments
         val response = if (attachments.isEmpty()) {
             call("POST", url, data, "application/json; charset=utf-8")
