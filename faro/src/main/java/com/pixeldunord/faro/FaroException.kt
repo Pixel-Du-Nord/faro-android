@@ -89,18 +89,26 @@ public sealed class FaroException(
 
         /**
          * The typed error for a Faro error response. [body] is the JSON body
-         * (`{errorCode, errorNumber, message}`), [retryAfter] the `Retry-After` header.
+         * (`{errorCode, errorNumber, message, field?, reason?}`), [retryAfter] the `Retry-After` header.
+         * `field` and `reason` come apart since Faro 2026-10-23; older answers carry them in the
+         * message (`"field: where"`, `"proof: expired"`).
          */
         fun from(status: Int, body: String?, retryAfter: String? = null): FaroException {
             val json = runCatching { JSONObject(body.orEmpty()) }.getOrNull()
             val code = json?.optString("errorCode")?.takeIf { it.isNotEmpty() } ?: "HTTP_$status"
             val message = json?.optString("message").orEmpty()
             return when (code) {
-                "INVALID_FORM" -> InvalidForm(message.substringAfter("field:", "").trim())
+                "INVALID_FORM" -> InvalidForm(
+                    json?.optString("field")?.takeIf { it.isNotEmpty() }
+                        ?: message.substringAfter("field:", "").trim()
+                )
                 "INVALID_EMAIL_FORMAT" -> InvalidEmail()
                 "INVALID_TEXT" -> InvalidMessage()
                 "RATE_LIMITED" -> RateLimited(retryAfter?.trim()?.toIntOrNull())
-                "SPAM_CHECK_FAILED" -> SpamCheck(message.substringAfter("proof:", "").trim().ifEmpty { null })
+                "SPAM_CHECK_FAILED" -> SpamCheck(
+                    json?.optString("reason")?.takeIf { it.isNotEmpty() }
+                        ?: message.substringAfter("proof:", "").trim().ifEmpty { null }
+                )
                 "FILE_TOO_LARGE" -> AttachmentTooLarge()
                 "FILE_TYPE_NOT_ALLOWED" -> AttachmentType()
                 "MODULE_REQUIRED" -> ModuleRequired()

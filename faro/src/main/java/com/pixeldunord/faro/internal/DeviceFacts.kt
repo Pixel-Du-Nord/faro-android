@@ -38,7 +38,7 @@ internal object DeviceFacts {
         ).filterValues { it.isNotBlank() }
     }
 
-    /** Which SDK filed the request, as the iOS SDK says it (`faro-ios 1.0.1`). */
+    /** Which SDK filed the request, as the iOS SDK says it (`faro-ios 1.0.2`). */
     val SDK: String = "faro-android ${BuildConfig.FARO_VERSION}"
 
     /**

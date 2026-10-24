@@ -21,6 +21,14 @@ class ErrorMappingTest {
     }
 
     @Test
+    fun fieldAndReasonComeApart() {
+        val form = FaroException.from(400, """{"errorCode":"INVALID_FORM","message":"field: where","field":"order"}""")
+        assertEquals("order", (form as FaroException.InvalidForm).field)
+        val spam = FaroException.from(400, """{"errorCode":"SPAM_CHECK_FAILED","message":"x","reason":"expired"}""")
+        assertEquals("expired", (spam as FaroException.SpamCheck).reason)
+    }
+
+    @Test
     fun spamCheckCarriesTheReason() {
         val e = FaroException.from(400, body("SPAM_CHECK_FAILED", 400027, "proof: too_fast"))
         assertEquals("too_fast", (e as FaroException.SpamCheck).reason)

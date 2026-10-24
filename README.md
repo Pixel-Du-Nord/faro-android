@@ -35,9 +35,9 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.Pixel-Du-Nord.faro-android:faro-ui:1.0.1") // the screen (includes the core)
+    implementation("com.github.Pixel-Du-Nord.faro-android:faro-ui:1.0.2") // the screen (includes the core)
     // or only the core, for your own UI:
-    // implementation("com.github.Pixel-Du-Nord.faro-android:faro:1.0.1")
+    // implementation("com.github.Pixel-Du-Nord.faro-android:faro:1.0.2")
 }
 ```
 

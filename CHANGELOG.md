@@ -4,6 +4,14 @@ All notable changes to Faro for Android. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-10-23
+
+### Changed
+
+- `INVALID_FORM` and `SPAM_CHECK_FAILED` read the field and the reason from Faro's own `field` and
+  `reason` properties. Answers from an older Faro, which carry them in the message
+  (`"field: where"`, `"proof: expired"`), are still understood.
+
 ## [1.0.1] - 2026-10-22
 
 ### Fixed
